@@ -6,6 +6,7 @@ When [starting the `pcsm` process](start-pcsm.md), you can use the following opt
 - `--source`: The MongoDB connection string for the source cluster
 - `--target`: The MongoDB connection string for the target cluster
 - `--group-name`: A name that identifies the HA deployment in member information, API responses, metrics, and logs (default: "default")
+- `--ha-lease-ttl`: How long the HA lease stays valid after the active instance renews it (default: `10s`). The minimum value is `10s`. Set the same value on every instance. See [Configure the lease TTL](../high-availability.md#configure-the-lease-ttl).
 - `--log-level`: The log level (default: "info")
 - `--log-json`: Output log in JSON format with disabled color
 - `--no-color`: Disable log ANSI color
@@ -37,6 +38,7 @@ Alternatively, you can define the following environment variables:
 | `PCSM_SOURCE_URI` | MongoDB connection string for the source cluster | - |
 | `PCSM_TARGET_URI` | MongoDB connection string for the target cluster | - |
 | `PCSM_GROUP_NAME` | A name that identifies the HA deployment in member information, API responses, metrics, and logs. | `default` |
+| `PCSM_HA_LEASE_TTL` | How long the HA lease stays valid after the active instance renews it. The minimum value is `10s`. Set the same value on every instance. See [Configure the lease TTL](../high-availability.md#configure-the-lease-ttl). | `10s` |
 | `PCSM_PORT` | Server port number | `2242` |
 | `PCSM_CLONE_NUM_PARALLEL_COLLECTIONS` | Number of collections cloned in parallel | `2` |
 | `PCSM_CLONE_NUM_READ_WORKERS` | Number of read workers for cloning | `NumCPU / 4` |

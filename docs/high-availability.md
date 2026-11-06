@@ -4,7 +4,7 @@
 
 Percona ClusterSync for MongoDB (PCSM) supports active-standby high availability during replication. Run two or more instances against the same source and target, and one of them takes charge while the rest wait. If the active instance becomes unavailable, another takes over and resumes replication from the last checkpoint.
 
-High availability is always enabled and requires no configuration. A single instance behaves the same as in earlier versions. To enable failover, start a second instance with the same source and target.
+High availability is always enabled and works with the default settings. You can [configure the lease TTL](#configure-the-lease-ttl) to tolerate longer target outages. A single instance behaves the same as in earlier versions. To enable failover, start a second instance with the same source and target.
 
 !!! info "Important"
     High availability applies to the **replication phase after the initial clone completes**.
@@ -49,11 +49,11 @@ If a previous active instance resumes after losing its lease, its checkpoint wri
 
 When a standby becomes `ACTIVE`, PCSM resumes replication from the last persisted checkpoint. Failover uses the existing recovery mechanism and happens automatically.
 
-The timings are fixed:
+PCSM uses the following timings. Only the lease TTL is configurable:
 
 | **Setting** | **Value** |
 |---------|-------|
-| Lease TTL | 10 seconds |
+| Lease TTL | 10 seconds by default. See [Configure the lease TTL](#configure-the-lease-ttl). |
 | Lease renewal by the active instance | Every 3 seconds |
 | Heartbeat interval | Every 3 seconds |
 | Stale member threshold | 3 missed heartbeats |
@@ -122,6 +122,57 @@ The default group name is `default`.
 
     Do not rely on different group names to create independent HA deployments against the same target.
 
+### Configure the lease TTL
+
+!!! admonition "Version added: 1.1.0"
+
+The lease time to live (TTL) defines how long the `ACTIVE` instance keeps the lease after it renews it. The active instance renews the lease every 3 seconds. If it can't renew the lease within the TTL, for example because the target cluster is unreachable, it gives up the `ACTIVE` role. The instance that becomes `ACTIVE` next resumes replication from the last checkpoint. If the initial clone was in progress, PCSM can't resume it, and you must start a new synchronization run.
+
+The default TTL of 10 seconds keeps failover fast. Raise the TTL to reduce the number of failovers caused by short target outages, such as a primary step-down, a slow election, or a brief network interruption. A longer TTL is most useful in these cases:
+
+* You run a single PCSM instance. There is no standby to take over, so losing the `ACTIVE` role only interrupts the work. If this happens during the initial clone, you have to clone the data again from the beginning.
+* Your target cluster has short, expected interruptions, such as planned primary step-downs, that shouldn't trigger a failover.
+
+The trade-off is slower failover. A standby takes over only after the lease expires. If the active instance crashes, failover takes up to the TTL plus a few seconds for the standby to acquire the lease and restore the checkpoint.
+
+To set the TTL, use the `--ha-lease-ttl` option or the `PCSM_HA_LEASE_TTL` environment variable. Specify a duration, such as `60s` or `2m`. For example:
+
+```bash
+pcsm \
+    --source "<source-mongodb-uri>" \
+    --target "<target-mongodb-uri>" \
+    --ha-lease-ttl 60s
+```
+
+Follow these rules when you set the TTL:
+
+* The minimum value is `10s`. PCSM doesn't start with a smaller value and reports an error such as `--ha-lease-ttl must be at least 10s, got 5s`. There is no maximum value.
+* Set the same value on every instance in the HA deployment. The active instance applies its own TTL to the lease. If instances use different values, the time a standby waits before it takes over depends on which instance is active.
+
+At startup, PCSM logs the TTL it uses:
+
+```{.text .no-copy}
+Config: HALeaseTTL: 1m0s
+```
+
+#### Target outages and the lease TTL
+
+A longer TTL doesn't always extend outage tolerance by the same amount, for the following reasons:
+
+* The TTL counts from the start of the last successful renewal, which can happen up to 3 seconds before the outage begins.
+* The active instance also writes a checkpoint to the target every 15 seconds and when the replication state changes. If a checkpoint write fails, the instance gives up the `ACTIVE` role, even if the lease is still valid. When the target has no reachable primary, a checkpoint write fails after about 30 seconds.
+
+The following table shows approximately when an active instance gives up the `ACTIVE` role during a target outage:
+
+| Target outage | Default TTL (10 seconds) | Raised TTL |
+|---------------|--------------------------|------------|
+| No primary is reachable on the target, for example during a network partition or a long election | After about 7 to 10 seconds | After the TTL minus up to 3 seconds, or after about 30 to 45 seconds, whichever comes first |
+| The primary accepts writes, but majority write acknowledgement stalls, for example because secondaries lag or are stopped | After about 7 to 10 seconds | After the TTL minus up to 3 seconds, or after the MongoDB operation timeout (`--mongodb-operation-timeout`, 5 minutes by default), whichever comes first |
+
+These values are estimates, not guarantees. An error that the target returns immediately, such as a dropped connection, can end the `ACTIVE` role sooner. When the target has no reachable primary, a TTL longer than about 30 seconds has little additional effect.
+
+For example, with `--ha-lease-ttl 60s`, a 15-second period without a primary on the target doesn't end the `ACTIVE` role. Replication or an initial clone in progress continues after the target recovers, without a failover or a new synchronization run.
+
 ## Failover during the initial clone
 
 High availability applies to the replication phase after the initial clone completes. The initial clone is not resumable because PCSM does not persist progress for individual collections.
@@ -135,6 +186,8 @@ initial clone interrupted by failover and is not resumable; start a new run to r
 !!! info "Important"
 
     To recover, start a new synchronization run on the `ACTIVE` instance. PCSM starts the initial clone again from the beginning. Automatic recovery from the last checkpoint becomes available after the initial clone completes and PCSM enters the replication phase.
+
+To keep a short target outage from interrupting the initial clone, raise the lease TTL. See [Configure the lease TTL](#configure-the-lease-ttl).
 
 See the [PCSM HTTP API](api.md) for information about the `/status` endpoint and [Start the replication](install/usage.md#start-the-replication) for information about starting a new synchronization run.
 
